@@ -17,11 +17,8 @@ TODO:
 
 """
 
-with open(os.path.dirname(os.path.abspath(__file__)), 'r') as f:
+with open(os.path.dirname(os.path.abspath(__file__)) + '/credentials', 'r') as f:
     db_password = f.readline()
-
-
-
 
 logging.config.fileConfig(fname='file.conf', disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
@@ -63,7 +60,7 @@ def get_snap(coordinates):
         speed = (distance / duration) * 3.6
     except ZeroDivisionError:
         speed = 0
-        #print(traceback.format_exc())
+        # print(traceback.format_exc())
     out = {  # 'route': routes,
         'start_point': start_point,
         'end_point': end_point,
@@ -196,8 +193,7 @@ def threaded_client(connection, db):
                             db.commit()
                             print(f'sql operation successful:{sql}')
 
-                        except Exception as e:
-                            print('exception', e)
+                        except:
                             print(traceback.format_exc())
                         print('------------')
 
@@ -252,7 +248,6 @@ def threaded_client(connection, db):
                 print('no data received')
                 break
         except Exception as e:
-            print(e)
             print(traceback.format_exc())
             logger.error(e)
             break
@@ -266,11 +261,9 @@ try:
             print('Got connection from', addr)
             start_new_thread(threaded_client, (socket_connection, db,))
             # print('Active connection count: ' + str(ThreadCount))
-        except Exception as e:
-            print(e)
+        except:
             print(traceback.format_exc())
-except e:
-    print('exception:', e)
+except:
     print(traceback.format_exc())
 finally:
     s.close()
