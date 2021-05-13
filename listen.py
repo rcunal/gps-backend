@@ -23,12 +23,20 @@ with open(os.path.dirname(os.path.abspath(__file__)) + '/credentials', 'r') as f
 logging.config.fileConfig(fname='file.conf', disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
-db = mysql.connector.connect(user='root', password=db_password, host='127.0.0.1', database='gps',
-                             auth_plugin='mysql_native_password')
 
-if db.is_connected():
-    print('Connected to mysql')
-cursor = db.cursor()
+def connect_db(db, cursor):
+    db = mysql.connector.connect(user='root', password=db_password, host='127.0.0.1', database='gps',
+                                 auth_plugin='mysql_native_password')
+
+    if db.is_connected():
+        print('Connected to mysql')
+    cursor = db.cursor()
+
+    return db, cursor
+
+
+db, cursor = None, None
+db, cursor = connect_db(db, cursor)
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -85,7 +93,8 @@ def h02_data_split(data):
     D = splitted_data[6]
     longitude_s = splitted_data[7]
     G = splitted_data[8]
-    geo_str = latitude_s[:2] + ' ' + latitude_s[2:] + "' " + D + ' ' + longitude_s[:3] + ' ' + longitude_s[3:] + "' " + G
+    geo_str = latitude_s[:2] + ' ' + latitude_s[2:] + "' " + D + ' ' + longitude_s[:3] + ' ' + longitude_s[
+                                                                                               3:] + "' " + G
     p = geopy.point.Point(geo_str)
 
     formatted_result = {'id': imei,
@@ -126,7 +135,7 @@ def get_speed(cur_coordinate, prev_coordinate):
     return speed
 
 
-def process_data(formatted_data, cur_coordinate, db):
+def process_data(formatted_data, prev_coordinate, cur_coordinate, db):
     prev_coordinate = cur_coordinate
 
     cur_coordinate = {'xy': (formatted_data['latitude'], formatted_data['longitude']),
@@ -173,21 +182,24 @@ def process_data(formatted_data, cur_coordinate, db):
                       expected_speed,
                       int(snapped_flag))
 
-            cursor.execute(query,values)
+            cursor.execute(query, values)
             db.commit()
             print(f'sql operation successful:{query}' % values)
 
         except:
             print(traceback.format_exc())
-        print('------------')
+        finally:
+            print('------------')
+            return prev_coordinate, cur_coordinate
 
     else:
         print('first coordinate received')
         print('------------')
+        return prev_coordinate, cur_coordinate
 
 
 def threaded_client(connection, db):
-    cur_coordinate = None
+    prev_coordinate, cur_coordinate = None, None
 
     while True:
         try:
@@ -197,12 +209,12 @@ def threaded_client(connection, db):
             if data:
                 if data[-1] == '#':
                     formatted_data = h02_data_split(data)
-                    process_data(formatted_data, cur_coordinate, db)
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db)
 
                 elif data[-1] == '@':
                     # parsing data
                     formatted_data = mobile_data_split(data)
-                    process_data(formatted_data, cur_coordinate, db)
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db)
                     print('mobile connection is not ready yet')
 
                 else:
@@ -225,6 +237,8 @@ try:
             print('Got connection from', addr)
             start_new_thread(threaded_client, (socket_connection, db,))
         except:
+            if not db.is_connected():
+                db, cursor = connect_db(db, cursor)
             print(traceback.format_exc())
 except:
     print(traceback.format_exc())
