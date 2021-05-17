@@ -17,20 +17,25 @@ TODO:
 [-] handle mobile data
 """
 
-with open(os.path.dirname(os.path.abspath(__file__)) + '/credentials', 'r') as f:
-    db_password = f.readline()
+
+def get_db_password():
+    with open(os.path.dirname(os.path.abspath(__file__)) + '/credentials', 'r') as f:
+        db_password = f.readline()
+        return db_password
+
 
 logging.config.fileConfig(fname='file.conf', disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
 def connect_db(db, cursor):
-    db = mysql.connector.connect(user='root', password=db_password, host='127.0.0.1', database='gps',
+    db = mysql.connector.connect(user='root', password=get_db_password(), host='127.0.0.1', database='gps',
                                  auth_plugin='mysql_native_password')
 
     if db.is_connected():
         print('Connected to mysql')
     cursor = db.cursor()
+    cursor.execute("SET SESSION interactive_timeout=31536000")
 
     return db, cursor
 
@@ -135,7 +140,7 @@ def get_speed(cur_coordinate, prev_coordinate):
     return speed
 
 
-def process_data(formatted_data, prev_coordinate, cur_coordinate, db):
+def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
     prev_coordinate = cur_coordinate
 
     cur_coordinate = {'xy': (formatted_data['latitude'], formatted_data['longitude']),
@@ -198,24 +203,26 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db):
         return prev_coordinate, cur_coordinate
 
 
-def threaded_client(connection, db):
+def threaded_client(connection, db, cursor):
     prev_coordinate, cur_coordinate = None, None
 
     while True:
         try:
             data_raw = connection.recv(128)
+            print(data_raw)
             data = data_raw.decode("utf-8")
 
             if data:
                 if data[-1] == '#':
                     formatted_data = h02_data_split(data)
-                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db)
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db,
+                                                                   cursor)
 
                 elif data[-1] == '@':
                     # parsing data
                     formatted_data = mobile_data_split(data)
-                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db)
-                    print('mobile connection is not ready yet')
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db,
+                                                                   cursor)
 
                 else:
                     print('corrupted data', data)
@@ -235,7 +242,7 @@ try:
         try:
             socket_connection, addr = s.accept()
             print('Got connection from', addr)
-            start_new_thread(threaded_client, (socket_connection, db,))
+            start_new_thread(threaded_client, (socket_connection, db, cursor,))
         except:
             if not db.is_connected():
                 db, cursor = connect_db(db, cursor)
