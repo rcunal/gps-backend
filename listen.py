@@ -54,6 +54,27 @@ print("socket is listening")
 ThreadCount = 0
 
 
+def get_max_speed(coordinate1, coordinate2):
+    url = "http://178.20.231.217:8989/route"
+    param_str = f"?point={coordinate1[0]},{coordinate1[1]}&point={coordinate2[0]},{coordinate2[1]}&details=max_speed"
+    r = requests.get(url + param_str)
+    if r.status_code != 200:
+        return None
+
+    res = r.json()
+    max_speeds = res['paths'][0]['details']['max_speed']
+
+    if not max_speeds:
+        return None
+
+    max_speeds = [x[2] for x in max_speeds if x[2] is not None]
+
+    if not max_speeds:
+        return None
+
+    return max(max_speeds)
+
+
 def get_snap(coordinates):
     url = "http://178.20.231.217:5000/match/v1/driving/"
     param_str = ""
@@ -90,8 +111,11 @@ def h02_data_split(data):
     splitted_data = data.split(',')
     logger.info(f'data:{splitted_data}')
     imei = splitted_data[1]
+    valid_flag = splitted_data[4]
     hhmmss = splitted_data[3]
     ddmmyy = splitted_data[11]
+    vehicle_status = convert_bytes(splitted_data[12])
+    backup_battery = int(vehicle_status[1][4])
     time_obj = datetime.strptime(hhmmss + ddmmyy, "%H%M%S%d%m%y")
     timestamp = time_obj.strftime('%Y-%m-%d %H:%M:%S')
     latitude_s = splitted_data[5]
@@ -107,7 +131,9 @@ def h02_data_split(data):
                         'time_obj': time_obj,
                         'time_stamp': timestamp,
                         'latitude': p.latitude,
-                        'longitude': p.longitude}
+                        'longitude': p.longitude,
+                        'backup_battery': backup_battery,
+                        'validation': valid_flag}
 
     return formatted_result
 
@@ -140,7 +166,18 @@ def get_speed(cur_coordinate, prev_coordinate):
     return speed
 
 
+def convert_bytes(x):
+    binary = bin(int(x, 16))[2:].zfill(8)
+    inverse_s = ''.join(['1' if i == '0' else '0'
+                         for i in binary])
+    return [inverse_s[index : index + 8] for index in range(0, len(inverse_s), 8)]
+
+
 def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
+    if 'validation' in formatted_data.keys():
+        if formatted_data['validation'] != "A":
+            return prev_coordinate, cur_coordinate
+
     prev_coordinate = cur_coordinate
 
     cur_coordinate = {'xy': (formatted_data['latitude'], formatted_data['longitude']),
@@ -157,12 +194,14 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
 
         # bağlantı kopmuş, yeniden bağlanmış
         if prev_coordinate_raw:
-            prev_coordinate = {'xy': (prev_coordinate_raw[0][3], prev_coordinate_raw[0][4]),
-                               'time': prev_coordinate_raw[0][2]
+            prev_coordinate = {'xy': (prev_coordinate_raw[0][4], prev_coordinate_raw[0][5]),
+                               'time': prev_coordinate_raw[0][3]
                                }
 
     snapped_flag = False
-    expected_speed = None
+    backup_battery = 0
+    if 'backup_battery' in formatted_data.keys():
+        backup_battery = formatted_data['backup_battery']
 
     if prev_coordinate:
         try:
@@ -170,13 +209,14 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
             if snapped_result:
                 cur_coordinate['xy'] = snapped_result['end_point']
                 snapped_flag = True
-                expected_speed = snapped_result['speed']
+                #expected_speed = snapped_result['speed']
 
             speed = get_speed(cur_coordinate, prev_coordinate)
+            expected_speed = get_max_speed(prev_coordinate['xy'], cur_coordinate['xy'])
             print(f'prev:{prev_coordinate} \n cur:{cur_coordinate}')
             query = """
-            INSERT INTO `test` (id,device_type,time_stamp,latitude,longitude,speed,expected_speed,snapped)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO `test` (id,device_type,time_stamp,latitude,longitude,speed,expected_speed,snapped,backup_battery)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             values = (formatted_data['id'],
                       formatted_data['device_type'],
@@ -185,7 +225,8 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
                       cur_coordinate['xy'][1],
                       speed,
                       expected_speed,
-                      int(snapped_flag))
+                      int(snapped_flag),
+                      backup_battery)
 
             cursor.execute(query, values)
             db.commit()

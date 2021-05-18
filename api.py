@@ -19,6 +19,27 @@ cursor = db.cursor()
 cursor.execute("SET SESSION interactive_timeout=31536000")
 
 
+def get_max_speed(coordinate1, coordinate2):
+    url = "http://178.20.231.217:8989/route"
+    param_str = f"?point={coordinate1[0]},{coordinate1[1]}&point={coordinate2[0]},{coordinate2[1]}&details=max_speed"
+    r = requests.get(url + param_str)
+    if r.status_code != 200:
+        return None
+
+    res = r.json()
+    max_speeds = res['paths'][0]['details']['max_speed']
+
+    if not max_speeds:
+        return None
+
+    max_speeds = [x[2] for x in max_speeds if x[2] is not None]
+
+    if not max_speeds:
+        return None
+
+    return max(max_speeds)
+
+
 def get_last_coordinate(coordinate):
     last_coordinate_query = "select * from test where id = %s and time_stamp < %s order by time_stamp desc limit 1"
     last_coordinate_query_values = (coordinate['id'], coordinate['time'])
@@ -29,7 +50,7 @@ def get_last_coordinate(coordinate):
 
 def get_speed(cur_coordinate, prev_coordinate):
     distance = geopy.distance.geodesic((cur_coordinate['x'], cur_coordinate['y']),
-                                       (prev_coordinate[0][3], prev_coordinate[0][4])).km
+                                       (prev_coordinate[0][4], prev_coordinate[0][5])).km
     elapsed_time = (cur_coordinate['time'] - prev_coordinate[0][2]).seconds / 3600.0
     speed = distance / elapsed_time
     return speed
@@ -44,7 +65,7 @@ def get_snap(coordinates):
     for index, coor in enumerate(coordinates):
         prev_coordinate = get_last_coordinate(coor)
         if prev_coordinate:
-            param_str = prev_coordinate[0][4] + "," + prev_coordinate[0][3] + ';'
+            param_str = prev_coordinate[0][5] + "," + prev_coordinate[0][4] + ';'
             param_str += coor['y'] + "," + coor['x']
             r = requests.get(url + param_str)
 
@@ -58,6 +79,8 @@ def get_snap(coordinates):
                 coordinates[index]['snapped'] = 0
 
             coordinates[index]['speed'] = get_speed(coor, prev_coordinate)
+            expected_speed = get_max_speed((prev_coordinate[0][4], prev_coordinate[0][5]),
+                                                                 (coor['x'], coor['y']))
 
         else:
             coordinates[index]['snapped'] = 0
@@ -90,6 +113,22 @@ def insert_many_rows(coordinate_list):
         print(traceback.format_exc())
 
 
+"""
+id ile eşleşen bütün rowları al order by time_stamp
+lap=0 
+row in rows:
+    lap yoksa hesapla
+        if row1date - row2_date
+        
+    update row
+"""
+
+
+def calculate_laps(device_id):
+    cursor.execute()
+
+
+
 @app.route('/')
 def test():
     param = request.args.get("add")
@@ -110,3 +149,11 @@ def get_offline_data():
     insert_many_rows(coordinate_list)
 
     return jsonify(data_json)
+
+
+@app.route('/laps')
+def laps():
+
+
+
+    return "test"
