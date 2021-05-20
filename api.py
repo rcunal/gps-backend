@@ -3,6 +3,8 @@ import mysql.connector
 import requests
 import geopy
 import traceback
+import numpy as np
+import timeit
 
 
 def get_db_password():
@@ -17,6 +19,7 @@ db = mysql.connector.connect(user='root', password=get_db_password(), host='127.
                              auth_plugin='mysql_native_password')
 cursor = db.cursor()
 cursor.execute("SET SESSION interactive_timeout=31536000")
+cursor.execute("SET SESSION wait_timeout=31536000")
 
 
 def get_max_speed(coordinate1, coordinate2):
@@ -80,7 +83,7 @@ def get_snap(coordinates):
 
             coordinates[index]['speed'] = get_speed(coor, prev_coordinate)
             expected_speed = get_max_speed((prev_coordinate[0][4], prev_coordinate[0][5]),
-                                                                 (coor['x'], coor['y']))
+                                           (coor['x'], coor['y']))
 
         else:
             coordinates[index]['snapped'] = 0
@@ -116,17 +119,68 @@ def insert_many_rows(coordinate_list):
 """
 id ile eşleşen bütün rowları al order by time_stamp
 lap=0 
+(gps cihazları için aç kapat tutuluyor)
 row in rows:
     lap yoksa hesapla
         if row1date - row2_date
         
     update row
+    
+    
+0,0,0,0,1,1,1,1,0,0,0    
+None,10,None,11,11,None
+None,None,None,None    
+    
 """
 
 
-def calculate_laps(device_id):
-    cursor.execute()
+def calculate_laps(device_id, since_date):
+    start_time = timeit.default_timer()
+    current_lap_id = 1
+    # cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp >= now() - INTERVAL 1 DAY ORDER BY time_stamp;",
+    #                (device_id,))
 
+    cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp >= %s ORDER BY time_stamp;",
+                   (device_id, since_date))
+
+    rows = cursor.fetchall()
+
+    cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp <= %s ORDER BY lap DESC LIMIT 1;",
+                   (device_id, since_date))
+    max_lap_row = cursor.fetchall()[0]
+    if len(max_lap_row) == 11:
+        if max_lap_row[9] is not None:
+            current_lap_id = max_lap_row[9]
+
+    lap_ids = [x[9] for x in rows]
+    backup_battery_status = [x[10] for x in rows]
+    filtered_lab_ids = list(filter(lambda l_id: l_id is not None, lap_ids))
+    if filtered_lab_ids:
+        current_lap_id = min(filtered_lab_ids)
+
+    cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp < %s ORDER BY time_stamp DESC LIMIT 1;",
+                   (device_id, since_date))
+    last_row = cursor.fetchall()[0]
+
+
+    updated_lap_ids = []
+    prev_status = 0
+    # 0 dan 1 = tur bitiş, 1 den 0 = yeni tur
+    for status in backup_battery_status:
+        if prev_status == 1 and status == 0:
+            current_lap_id += 1
+        prev_status = status
+        updated_lap_ids.append(current_lap_id)
+
+    # updating only changed laps
+    values = [(updated_lap_ids[i], rows[i][0]) for i in range(len(rows)) if rows[i][9] != updated_lap_ids[i]]
+
+    cursor.executemany("UPDATE test SET lap = %s WHERE row_id = %s ",
+                       values)
+    db.commit()
+    print(f'elapsed_time:{timeit.default_timer()-start_time}')
+    return updated_lap_ids
+# x = calculate_laps(device_id,since_date)
 
 
 @app.route('/')
@@ -153,7 +207,4 @@ def get_offline_data():
 
 @app.route('/laps')
 def laps():
-
-
-
     return "test"

@@ -11,6 +11,7 @@ import logging.config
 import requests
 import polyline
 import traceback
+import atexit
 
 """" 
 TODO:
@@ -28,20 +29,27 @@ logging.config.fileConfig(fname='file.conf', disable_existing_loggers=False)
 logger = logging.getLogger(__name__)
 
 
-def connect_db(db, cursor):
+def connect_db():
     db = mysql.connector.connect(user='root', password=get_db_password(), host='127.0.0.1', database='gps',
                                  auth_plugin='mysql_native_password')
 
     if db.is_connected():
         print('Connected to mysql')
+    # cursor = db.cursor()
+    # cursor.execute("SET SESSION interactive_timeout=31536000")
+    # cursor.execute("SET SESSION wait_timeout=31536000")
+
+    return db
+
+
+def get_cursor(db):
     cursor = db.cursor()
     cursor.execute("SET SESSION interactive_timeout=31536000")
+    cursor.execute("SET SESSION wait_timeout=31536000")
+    return cursor
 
-    return db, cursor
 
-
-db, cursor = None, None
-db, cursor = connect_db(db, cursor)
+#db = connect_db()
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -244,9 +252,10 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
         return prev_coordinate, cur_coordinate
 
 
-def threaded_client(connection, db, cursor):
+def threaded_client(connection):
     prev_coordinate, cur_coordinate = None, None
-
+    db = connect_db()
+    cursor = get_cursor(db)
     while True:
         try:
             data_raw = connection.recv(128)
@@ -256,14 +265,12 @@ def threaded_client(connection, db, cursor):
             if data:
                 if data[-1] == '#':
                     formatted_data = h02_data_split(data)
-                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db,
-                                                                   cursor)
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor)
 
                 elif data[-1] == '@':
                     # parsing data
                     formatted_data = mobile_data_split(data)
-                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db,
-                                                                   cursor)
+                    prev_coordinate, cur_coordinate = process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor)
 
                 else:
                     print('corrupted data', data)
@@ -278,15 +285,26 @@ def threaded_client(connection, db, cursor):
     connection.close()
 
 
+def close_socket(s):
+    s.close()
+
+
+atexit.register(close_socket, s)
+
 try:
     while True:
         try:
             socket_connection, addr = s.accept()
             print('Got connection from', addr)
-            start_new_thread(threaded_client, (socket_connection, db, cursor,))
+            start_new_thread(threaded_client, (socket_connection,))
+
+        except KeyboardInterrupt:
+            break
+
         except:
-            if not db.is_connected():
-                db, cursor = connect_db(db, cursor)
+            # if not db.is_connected():
+            #     print('db disconnected')
+            #     db = connect_db()
             print(traceback.format_exc())
 except:
     print(traceback.format_exc())
