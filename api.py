@@ -5,6 +5,7 @@ import geopy
 import traceback
 import numpy as np
 import timeit
+import datetime
 
 
 def get_db_password():
@@ -147,34 +148,45 @@ def calculate_laps(device_id, since_date):
 
     cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp <= %s ORDER BY lap DESC LIMIT 1;",
                    (device_id, since_date))
-    max_lap_row = cursor.fetchall()[0]
-    if len(max_lap_row) == 11:
-        if max_lap_row[9] is not None:
-            current_lap_id = max_lap_row[9]
+    max_lap_row = cursor.fetchall()
+    if max_lap_row:
+        max_lap_row = max_lap_row[0]
+        if len(max_lap_row) == 11:
+            if max_lap_row[9] is not None:
+                current_lap_id = max_lap_row[9]
 
+    device_type = rows[0][2]
     lap_ids = [x[9] for x in rows]
     backup_battery_status = [x[10] for x in rows]
-    filtered_lab_ids = list(filter(lambda l_id: l_id is not None, lap_ids))
-    if filtered_lab_ids:
-        current_lap_id = min(filtered_lab_ids)
+    filtered_lap_ids = list(filter(lambda l_id: l_id is not None, lap_ids))
+    if filtered_lap_ids:
+        current_lap_id = min(filtered_lap_ids)
 
     cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp < %s ORDER BY time_stamp DESC LIMIT 1;",
                    (device_id, since_date))
-    last_row = cursor.fetchall()[0]
-
+    last_row = cursor.fetchall()
+    if last_row:
+        last_row = last_row[0]
 
     updated_lap_ids = []
-    prev_status = 0
-    # 0 dan 1 = tur bitiş, 1 den 0 = yeni tur
-    for status in backup_battery_status:
-        if prev_status == 1 and status == 0:
-            current_lap_id += 1
-        prev_status = status
-        updated_lap_ids.append(current_lap_id)
+
+    if device_type == 'h02':
+        prev_status = 0
+        if last_row:
+            prev_status = last_row[10]
+        # 0 dan 1 = tur bitiş, 1 den 0 = yeni tur
+        for status in backup_battery_status:
+            if prev_status == 1 and status == 0:
+                current_lap_id += 1
+            prev_status = status
+            updated_lap_ids.append(current_lap_id)
+
+    elif device_type == 'mobile':
+        pass
 
     # updating only changed laps
     values = [(updated_lap_ids[i], rows[i][0]) for i in range(len(rows)) if rows[i][9] != updated_lap_ids[i]]
-
+    print(len(values))
     cursor.executemany("UPDATE test SET lap = %s WHERE row_id = %s ",
                        values)
     db.commit()
@@ -205,6 +217,111 @@ def get_offline_data():
     return jsonify(data_json)
 
 
-@app.route('/laps')
+@app.route('/laps', methods=['POST'])
 def laps():
-    return "test"
+    device_id = request.form.get('device_id')
+    since = request.form.get('since')
+    since_date = datetime.datetime.strptime(since, '%d-%m-%Y')
+    updated_lap_ids = calculate_laps(device_id, since_date)
+
+    return jsonify(updated_lap_ids)
+
+
+@app.route('/search')
+def search():
+    device_id = int(request.args.get("device_id"))
+    func_id = int(request.args.get('function_id'))
+
+    if func_id == 1:
+        cursor.execute("SELECT * FROM test WHERE id = %s ORDER BY time_stamp desc limit 1;",
+                       (device_id,))
+
+        row = cursor.fetchall()[0]
+        if row:
+            print(f'row:{row}')
+            lap_id = row[9]
+            if lap_id:
+                print(f'lap:{lap_id}')
+                cursor.execute("SELECT * FROM test WHERE id = %s and lap = %s ORDER BY time_stamp;",
+                               (device_id, lap_id))
+
+                rows = cursor.fetchall()
+                if len(rows) > 1:
+                    start = rows[0][3]
+                    end = rows[-1][3]
+                    coordinates = []
+                    for row_i in rows:
+                        coordinates.append({
+                            "long": row_i[5],
+                            "lat": row_i[4],
+                            "limit": row_i[7],
+                            "speed": row_i[6]
+                        })
+
+                    results = {
+                        "Lap id": lap_id,
+                        "Start": start,
+                        "End": end,
+                        "Coordinates": coordinates
+                    }
+                    return results
+
+    elif func_id == 2:
+        start = request.args.get("start")
+        end = request.args.get("end")
+        start_date = datetime.datetime.strptime(start, '%d-%m-%Y')
+        end_date = datetime.datetime.strptime(end, '%d-%m-%Y')
+
+        cursor.execute("SELECT * FROM test WHERE id = %s and time_stamp >= %s and time_stamp <= %s ORDER BY time_stamp;",
+                       (device_id, start_date, end_date))
+
+        rows = cursor.fetchall()
+
+        rows_json = []
+        for row_i in rows:
+            rows_json.append({
+                "Timestamp": row_i[3],
+                "lon": row_i[5],
+                "lat": row_i[4]
+            })
+
+        #"Timestamp":
+        results = {
+            "Device Id": device_id,
+            "Result": rows_json
+        }
+
+        return results
+
+    # bitmeyen tur durumu tutulmuyor, hesaplandıysa verinin tur id si var
+    elif func_id == 3:
+        date_s = request.args.get("date")
+        date = datetime.datetime.strptime(date_s, '%d-%m-%Y')
+
+        cursor.execute("SELECT DISTINCT lap FROM test "
+                       "WHERE id = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
+                       "ORDER BY lap;",
+                       (device_id, date, date))
+        laps = cursor.fetchall()
+        if laps:
+            laps = laps[0]
+
+        results = []
+
+        for lap in laps:
+            cursor.execute("SELECT min(time_stamp),max(time_stamp) FROM test "
+                           "WHERE id = %s and lap = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
+                           "ORDER BY time_stamp;",
+                           (device_id, lap, date, date))
+
+            start_end_dates = cursor.fetchall()
+            if start_end_dates:
+                start_end_dates = start_end_dates[0]
+            results.append({
+                "Lap Id": lap,
+                "Start": start_end_dates[0],
+                "End": start_end_dates[1]
+            })
+        return jsonify(results)
+
+    return "Something went wrong"
