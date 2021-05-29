@@ -15,6 +15,8 @@ def get_db_password():
 
 
 app = Flask(__name__)
+app.config['JSON_SORT_KEYS'] = False
+
 param_list = []
 db = mysql.connector.connect(user='root', password=get_db_password(), host='127.0.0.1', database='gps',
                              auth_plugin='mysql_native_password')
@@ -191,7 +193,7 @@ def calculate_laps(device_id, since_date):
                        values)
     db.commit()
     print(f'elapsed_time:{timeit.default_timer()-start_time}')
-    return updated_lap_ids
+    return values
 # x = calculate_laps(device_id,since_date)
 
 
@@ -220,17 +222,30 @@ def get_offline_data():
 @app.route('/laps', methods=['POST'])
 def laps():
     device_id = request.form.get('device_id')
-    since = request.form.get('since')
-    since_date = datetime.datetime.strptime(since, '%d-%m-%Y')
-    updated_lap_ids = calculate_laps(device_id, since_date)
+    secret_key = request.form.get('key')
 
-    return jsonify(updated_lap_ids)
+    if secret_key == "api_key":
+        since = request.form.get('since')
+        since_date = datetime.datetime.strptime(since, '%d-%m-%Y')
+        updated_lap_ids = calculate_laps(device_id, since_date)
+
+        return {"updated lap ids": dict(updated_lap_ids),
+                "updated row count": len(updated_lap_ids)
+                } #jsonify(updated_lap_ids)
+    else:
+        return jsonify("Invalid API Key")
 
 
 @app.route('/search')
 def search():
-    device_id = int(request.args.get("device_id"))
-    func_id = int(request.args.get('function_id'))
+    device_id = request.args.get("device_id")
+    func_id = request.args.get('function_id')
+
+    if device_id:
+        device_id = int(device_id)
+
+    if func_id:
+        func_id = int(func_id)
 
     if func_id == 1:
         cursor.execute("SELECT * FROM test WHERE id = %s ORDER BY time_stamp desc limit 1;",
@@ -267,6 +282,68 @@ def search():
                     return results
 
     elif func_id == 2:
+        device_type = request.args.get("device_type")
+
+        q = """
+        SELECT tt.id, tt.time_stamp, tt.latitude, tt.longitude
+        FROM test tt
+        INNER JOIN
+            (SELECT id, MAX(time_stamp) AS MaxDateTime
+            FROM test
+            GROUP BY id) groupedtt 
+        ON tt.id = groupedtt.id 
+        AND tt.time_stamp = groupedtt.MaxDateTime
+        """
+
+        if device_type == 'mobile':
+            q += "WHERE tt.device_type = 'mobile'"
+        elif device_type == 'car':
+            q += "WHERE tt.device_type <> 'mobile'"
+
+        cursor.execute(q)
+        last_rows = cursor.fetchall()
+
+        results = []
+        for row in last_rows:
+            results.append({'Device Id': row[0], 'latitude': row[2], 'longitude': row[3], 'date': row[1]})
+
+        return jsonify(results)
+
+
+
+    # bitmeyen tur durumu tutulmuyor, hesaplandıysa verinin tur id si var
+    elif func_id == 3:
+        date_s = request.args.get("date")
+        date = datetime.datetime.strptime(date_s, '%d-%m-%Y')
+
+        cursor.execute("SELECT DISTINCT lap FROM test "
+                       "WHERE id = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
+                       "ORDER BY lap;",
+                       (device_id, date, date))
+        laps = cursor.fetchall()
+
+        # if laps:
+        #     laps = laps[0]
+
+        results = []
+
+        for lap in laps:
+            cursor.execute("SELECT min(time_stamp),max(time_stamp) FROM test "
+                           "WHERE id = %s and lap = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
+                           "ORDER BY time_stamp;",
+                           (device_id, lap[0], date, date))
+
+            start_end_dates = cursor.fetchall()
+            if start_end_dates:
+                start_end_dates = start_end_dates[0]
+            results.append({
+                "Lap Id": lap[0],
+                "Start": start_end_dates[0],
+                "End": start_end_dates[1]
+            })
+        return jsonify(results)
+
+    elif func_id == 8:
         start = request.args.get("start")
         end = request.args.get("end")
         start_date = datetime.datetime.strptime(start, '%d-%m-%Y')
@@ -292,36 +369,5 @@ def search():
         }
 
         return results
-
-    # bitmeyen tur durumu tutulmuyor, hesaplandıysa verinin tur id si var
-    elif func_id == 3:
-        date_s = request.args.get("date")
-        date = datetime.datetime.strptime(date_s, '%d-%m-%Y')
-
-        cursor.execute("SELECT DISTINCT lap FROM test "
-                       "WHERE id = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
-                       "ORDER BY lap;",
-                       (device_id, date, date))
-        laps = cursor.fetchall()
-        if laps:
-            laps = laps[0]
-
-        results = []
-
-        for lap in laps:
-            cursor.execute("SELECT min(time_stamp),max(time_stamp) FROM test "
-                           "WHERE id = %s and lap = %s and time_stamp >= %s and time_stamp < %s + INTERVAL 1 DAY "
-                           "ORDER BY time_stamp;",
-                           (device_id, lap, date, date))
-
-            start_end_dates = cursor.fetchall()
-            if start_end_dates:
-                start_end_dates = start_end_dates[0]
-            results.append({
-                "Lap Id": lap,
-                "Start": start_end_dates[0],
-                "End": start_end_dates[1]
-            })
-        return jsonify(results)
 
     return "Something went wrong"
