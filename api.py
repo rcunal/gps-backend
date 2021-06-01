@@ -6,6 +6,7 @@ import traceback
 import numpy as np
 import timeit
 import datetime
+from flask_cors import CORS
 
 
 def get_db_password():
@@ -16,6 +17,13 @@ def get_db_password():
 
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
+
+api_v2_cors_config = {
+  "origins": ["https://178.20.231.217:5001"],
+  "allow_headers": ["Authorization", "Content-Type"]
+}
+
+CORS(app)
 
 param_list = []
 db = mysql.connector.connect(user='root', password=get_db_password(), host='127.0.0.1', database='gps',
@@ -48,7 +56,7 @@ def get_max_speed(coordinate1, coordinate2):
 
 def get_last_coordinate(coordinate):
     last_coordinate_query = "select * from test where id = %s and time_stamp < %s order by time_stamp desc limit 1"
-    last_coordinate_query_values = (coordinate['id'], coordinate['time'])
+    last_coordinate_query_values = (coordinate['id'], coordinate['time_stamp'])
     cursor.execute(last_coordinate_query, last_coordinate_query_values)
     prev_coordinate_raw = cursor.fetchall()
     return prev_coordinate_raw
@@ -69,6 +77,7 @@ def get_snap(coordinates):
     expected_speed = None
 
     for index, coor in enumerate(coordinates):
+        coordinates[index]['time_stamp'] = datetime.datetime.strptime(coor['time_stamp'], '%Y-%m-%d %H:%M:%S')
         prev_coordinate = get_last_coordinate(coor)
         if prev_coordinate:
             param_str = prev_coordinate[0][5] + "," + prev_coordinate[0][4] + ';'
@@ -106,7 +115,7 @@ def insert_many_rows(coordinate_list):
                     c['y'],
                     c['speed'],
                     c['expected_speed'],
-                    c['snapped_flag']) for c in coordinate_list]
+                    c['snapped']) for c in coordinate_list]
 
     query = "insert into test (id,device_type,time_stamp,latitude,longitude,speed,expected_speed,snapped) " \
             "values " + ",".join("(%s, %s, %s, %s, %s, %s, %s, %s)" for _ in values_list)
@@ -115,6 +124,7 @@ def insert_many_rows(coordinate_list):
 
     try:
         cursor.execute(query, flattened_values)
+        db.commit()
     except:
         print(traceback.format_exc())
 
@@ -241,8 +251,8 @@ def search():
     device_id = request.args.get("device_id")
     func_id = request.args.get('function_id')
 
-    if device_id:
-        device_id = int(device_id)
+    # if device_id:
+    #     device_id = int(device_id)
 
     if func_id:
         func_id = int(func_id)
@@ -282,10 +292,25 @@ def search():
                     return results
 
     elif func_id == 2:
+        if device_id:
+            q = "select * from test where id = %s order by time_stamp desc limit 1"
+            cursor.execute(q, (device_id,))
+            result = cursor.fetchall()
+            if result:
+                result = result[0]
+                response = {'device_id': device_id,
+                            'device_type': result[2],
+                            'time_stamp': result[3],
+                            'latitude': result[4],
+                            'longitude': result[5]}
+                return response
+            else:
+                return {}
+
         device_type = request.args.get("device_type")
 
         q = """
-        SELECT tt.id, tt.time_stamp, tt.latitude, tt.longitude
+        SELECT tt.id, tt.time_stamp, tt.latitude, tt.longitude, tt.device_type
         FROM test tt
         INNER JOIN
             (SELECT id, MAX(time_stamp) AS MaxDateTime
@@ -305,7 +330,8 @@ def search():
 
         results = []
         for row in last_rows:
-            results.append({'Device Id': row[0], 'latitude': row[2], 'longitude': row[3], 'date': row[1]})
+            results.append({'device_id': row[0], 'device_type': row[4],
+                            'latitude': row[2], 'longitude': row[3], 'time_stamp': row[1]})
 
         return jsonify(results)
 
