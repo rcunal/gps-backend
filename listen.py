@@ -213,7 +213,6 @@ def process_data(formatted_data, prev_coordinate, cur_coordinate, db, cursor):
 
     if prev_coordinate:
         try:
-
             raw_speed = get_speed(cur_coordinate, prev_coordinate)
             if raw_speed > 5 or formatted_data['device_type'] != 'mobile':
                 snapped_result = get_snap([prev_coordinate['xy'], cur_coordinate['xy']])

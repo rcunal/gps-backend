@@ -7,6 +7,7 @@ import numpy as np
 import timeit
 import datetime
 from flask_cors import CORS
+import geopy.distance
 
 
 def get_db_password():
@@ -65,7 +66,8 @@ def get_last_coordinate(coordinate):
 def get_speed(cur_coordinate, prev_coordinate):
     distance = geopy.distance.geodesic((cur_coordinate['x'], cur_coordinate['y']),
                                        (prev_coordinate[0][4], prev_coordinate[0][5])).km
-    elapsed_time = (cur_coordinate['time'] - prev_coordinate[0][2]).seconds / 3600.0
+
+    elapsed_time = (cur_coordinate['time_stamp'] - prev_coordinate[0][3]).seconds / 3600.0
     speed = distance / elapsed_time
     return speed
 
@@ -80,8 +82,9 @@ def get_snap(coordinates):
         coordinates[index]['time_stamp'] = datetime.datetime.strptime(coor['time_stamp'], '%Y-%m-%d %H:%M:%S')
         prev_coordinate = get_last_coordinate(coor)
         if prev_coordinate:
-            param_str = prev_coordinate[0][5] + "," + prev_coordinate[0][4] + ';'
-            param_str += coor['y'] + "," + coor['x']
+
+            param_str = str(prev_coordinate[0][5]) + "," + str(prev_coordinate[0][4]) + ';'
+            param_str += str(coor['y']) + "," + str(coor['x'])
             r = requests.get(url + param_str)
 
             if r.status_code == 200:
@@ -329,6 +332,23 @@ def search():
         last_rows = cursor.fetchall()
 
         results = []
+        for row in last_rows:
+            results.append({'device_id': row[0], 'device_type': row[4],
+                            'latitude': row[2], 'longitude': row[3], 'time_stamp': row[1]})
+
+        q2 = """
+        SELECT tt.id, tt.time_stamp, tt.latitude, tt.longitude, tt.device_type
+        FROM test2 tt
+        INNER JOIN
+            (SELECT id, MAX(time_stamp) AS MaxDateTime
+            FROM test2
+            GROUP BY id) groupedtt 
+        ON tt.id = groupedtt.id 
+        AND tt.time_stamp = groupedtt.MaxDateTime
+        """
+
+        cursor.execute(q2)
+        last_rows = cursor.fetchall()
         for row in last_rows:
             results.append({'device_id': row[0], 'device_type': row[4],
                             'latitude': row[2], 'longitude': row[3], 'time_stamp': row[1]})
